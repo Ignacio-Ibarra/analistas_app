@@ -1,0 +1,5 @@
+streamlit
+pandas
+plotly
+openpyxl  # Para poder leer archivos .xlsx en pandas
+chardet # para detectar encoding
