@@ -1,128 +1,113 @@
-import streamlit as st
 import pandas as pd
-import plotly.express as px
-import chardet
-
-# Función para cargar y cachear el archivo
-@st.cache_data
-def cargar_datos(archivo):
-    if archivo is not None:
-        try:
-            # Detectar encoding del archivo
-            raw_data = archivo.read(1024)
-            result = chardet.detect(raw_data)
-            encoding = result['encoding']
-            
-            # Volver a cargar el archivo desde el principio
-            archivo.seek(0)
-
-            # Cargar CSV con el encoding detectado
-            if archivo.name.endswith('.csv'):
-                try:
-                    # Intentar con distintos delimitadores comunes
-                    df = pd.read_csv(archivo, encoding=encoding)
-                except pd.errors.ParserError:
-                    archivo.seek(0)
-                    df = pd.read_csv(archivo, encoding=encoding, delimiter=';')  # Probar delimitador ';'
-            elif archivo.name.endswith('.xlsx'):
-                df = pd.read_excel(archivo)
-            else:
-                st.error("Tipo de archivo no soportado.")
-                return None, None, None
-
-            return df, encoding, "CSV" if archivo.name.endswith('.csv') else "XLSX"
-        except Exception as e:
-            st.error(f"Error al cargar el archivo: {e}")
-            return None, None, None
-    return None, None, None
-
-
-# Función para hacer QA
-def hacer_qa(df, encoding, tipo_archivo):
-    st.subheader("Resultados del QA")
-    
-    # Mostrar el encoding detectado
-    st.write(f"**Encoding detectado**: {encoding}")
-    
-    # Delimitador solo aplica para archivos CSV
-    if tipo_archivo == "CSV":
-        delimitador = ',' if df.to_csv().count(',') > df.to_csv().count(';') else ';'
-        st.write(f"**Delimitador detectado**: {delimitador}")
-    
-    # Calcular valores nulos por columna
-    nulos = df.isnull().sum()
-    st.write("**Valores nulos por columna**:")
-    st.write(nulos)
-    
-
-
-# Función para graficar
-def graficar(df, tipo_grafico, x_col, y_col=None):
-    if tipo_grafico == "Gráfico de líneas":
-        fig = px.line(df, x=x_col, y=y_col)
-    elif tipo_grafico == "Gráfico de barras":
-        fig = px.bar(df, x=x_col, y=y_col)
-    elif tipo_grafico == "Gráfico de tortas":
-        fig = px.pie(df, names=x_col, values=y_col)
-    else:
-        st.error("Tipo de gráfico no soportado.")
-        return None
-    st.plotly_chart(fig)
+import json
+import streamlit as st
+from graficos import graficar
+from dataset import cargar
+from metadatos import get_metadatos, define_schema, guardar_metadatos
+from qa import hacer_qa
+from fuentes import get_fuentes, add_fuente_to_dataset
 
 # Configuración de la página
 st.set_page_config(
-    page_title="Mi Aplicación de Streamlit",
+    page_title="Analistas App",
     page_icon="🎈",
-    layout="wide",  # Opción: 'centered'
-    initial_sidebar_state="expanded"  # Opción: 'collapsed'
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("Bienvenido a mi aplicación")
+st.title("Bienvenidos la app de analistas")
+
+
+# Inicializar lista para almacenar fuentes
+st.session_state['fuente_list'] = []
+
+
+
 
 # Cargar archivo
-archivo = st.file_uploader("Sube un archivo CSV o XLSX", type=['csv', 'xlsx'])
+path_dataset = st.file_uploader("Sube un archivo CSV o XLSX", type=['csv', 'xlsx'])
 
 # Cargar datos
-df, encoding, tipo_archivo = cargar_datos(archivo)
-mostrar_data = None
-nulos = None
+df, encoding, dataset_archivo = cargar(path_dataset)
+
 
 if df is not None:
-    st.subheader("Vamos a ver qué onda...")
 
-# Botón azul para hacer QA
-if st.button("Hacer QA", key="hacer_qa", help="Hacer controles de calidad en el archivo"):
-    hacer_qa(df, encoding, tipo_archivo)
-
+    if st.button("Muestra de datos"):
+        st.write(df.sample(len(df)).head(30))
     
+    # Metadatos
+    metadatos = get_metadatos(filename=dataset_archivo.replace(".csv",".json"))
 
-mostrar_data = st.checkbox("Mostrar data")
+    # Cargar fuentes
+    fuentes_df = get_fuentes(db_path='db_fuentes/db_fuentes.csv')
 
-if mostrar_data:
-    st.write(df)
+    st.subheader(f"Metadatos: {dataset_archivo}")
 
-    # Selección de gráfico
-    tipo_grafico = st.selectbox("Selecciona el tipo de gráfico", ["Gráfico de líneas", "Gráfico de barras", "Gráfico de tortas"])
+    if metadatos: 
+        st.write("Ya hay metadatos disponibles, si desea modificar haga clic en 'Generar metadatos'")
+        st.json(metadatos)
+    else: 
 
-    # Seleccionar columnas para graficar
-    columnas = df.columns.tolist()
-    x_col = st.selectbox("Selecciona la columna X", columnas)
+        # Modificación de metadatos
+        if st.button('Generar metadatos'):
 
-    # Para gráficos de líneas y barras se necesita seleccionar la columna Y
-    y_col = None
-    if tipo_grafico != "Gráfico de tortas":
-        y_col = st.selectbox("Selecciona la columna Y", columnas)
+            # Solicitar al usuario la descripción global del dataset
+            descripcion_dataset = st.text_area("Describa en qué consiste el dataset", help="Descripción acerca del contenido del dataset")
 
-    # Agregar opción de filtro
-    filtro_col = st.selectbox("Selecciona una columna para filtrar (opcional)", ['Ninguno'] + columnas)
+            # Agregar fuentes múltiples
+            if fuentes_df is not None:
+                st.write("Selecciona las fuentes utilizadas")
+                add_fuente_to_dataset(fuentes_df)
 
-    if filtro_col != 'Ninguno':
-        filtro_valores = df[filtro_col].unique()
-        filtro_valor = st.selectbox(f"Selecciona el valor para filtrar en {filtro_col}", filtro_valores)
-        df_filtrado = df[df[filtro_col] == filtro_valor]
-    else:
-        df_filtrado = df
+                # Mostrar las fuentes seleccionadas
+                if len(st.session_state.fuente_list) > 0:
+                    st.write("Fuentes seleccionadas:")
+                    for idx, fuente in enumerate(st.session_state.fuente_list, start=1):
+                        st.write(f"{idx}. {fuente['institucion']} - {fuente['fuente']}")
 
-    # Botón para graficar
-    if st.button("Generar gráfico"):
-        graficar(df_filtrado, tipo_grafico, x_col, y_col)
+
+            schema = define_schema(df=df)
+
+            # Armar el diccionario de metadatos
+            metadatos = {
+                'dataset_archivo': dataset_archivo,
+                'descripcion_dataset': descripcion_dataset,
+                'fuentes':st.session_state.fuente_list,
+                'schema': schema
+            }
+
+            # Guardar metadatos en un archivo JSON
+            if st.button("Guardar Metadatos"):
+                guardar_metadatos(metadatos, f"db_metadatos/metadatos_{dataset_archivo}.json")  
+
+        # Botón azul para hacer QA
+        if st.button("Hacer QA", key="hacer_qa", help="Hacer controles de calidad en el archivo", type="primary"):
+            hacer_qa(df, encoding, dataset_archivo)
+        
+    
+        # Botón para graficar
+        if st.button("Generar gráfico"):
+             # Selección de gráfico
+            tipo_grafico = st.selectbox("Selecciona el tipo de gráfico", ["Gráfico de líneas", "Gráfico de barras", "Gráfico de tortas"])
+
+            # Seleccionar columnas para graficar
+            columnas = df.columns.tolist()
+            x_col = st.selectbox("Selecciona la columna X", columnas)
+
+            # Para gráficos de líneas y barras se necesita seleccionar la columna Y
+            y_col = None
+            if tipo_grafico != "Gráfico de tortas":
+                y_col = st.selectbox("Selecciona la columna Y", columnas)
+
+            # Agregar opción de filtro
+            filtro_col = st.selectbox("Selecciona una columna para filtrar (opcional)", ['Ninguno'] + columnas)
+
+            if filtro_col != 'Ninguno':
+                filtro_valores = df[filtro_col].unique()
+                filtro_valor = st.selectbox(f"Selecciona el valor para filtrar en {filtro_col}", filtro_valores)
+                df_filtrado = df[df[filtro_col] == filtro_valor]
+            else:
+                df_filtrado = df
+            graficar(df_filtrado, tipo_grafico, x_col, y_col)
+
